@@ -8,6 +8,7 @@ import pandas as pd
 from ml_models.yield_prediction import yield_predictor
 from ml_models.crop_recommendation import crop_recommender
 from ml_models.disease_detection import disease_detector
+import gc  # Import garbage collector
 
 # Configuration
 DATA_PATH = "data/crop_yield.csv"
@@ -38,39 +39,20 @@ async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Starting Farmer Assistance API...")
     
-    # Load existing models if available
+    # Load light models (Yield/Crop) ONLY
     if os.path.exists(YIELD_MODEL_PATH):
         yield_predictor.load_model(YIELD_MODEL_PATH)
-        print("✅ Pre-trained yield model loaded")
     
     if os.path.exists(CROP_MODEL_PATH):
         crop_recommender.load_model(CROP_MODEL_PATH)
-        print("✅ Pre-trained crop recommendation model loaded")
-    
-    # Load data for reference if not loaded with model
-    if os.path.exists(DATA_PATH):
-        if yield_predictor.df is None:
-            yield_predictor.load_data(DATA_PATH)
-        if crop_recommender.df is None:
-            crop_recommender.load_data(DATA_PATH)
-        print("✅ Data loaded for reference")
-    else:
-        print("⚠️ Data file not found - models will train on first request")
-    
-    # Load disease model - COMMENTED OUT TO SAVE MEMORY ON STARTUP
-    # try:
-    #     disease_detector.load_model()
-    #     print("✅ Disease detection model loaded")
-    # except Exception as e:
-    #     print(f"⚠️ Disease detection model not loaded: {e}")
-    
-    print("🌐 API ready at http://localhost:8000")
-    print("📖 Documentation: http://localhost:8000/docs")
+
+    # DO NOT load Disease model at startup
     
     yield
     
-    # Shutdown (optional)
+    # Shutdown
     print("👋 Shutting down...")
+    gc.collect()
 
 # FastAPI App with lifespan
 app = FastAPI(
@@ -223,22 +205,42 @@ async def load_disease_model():
 @app.post("/api/disease-detection/predict")
 async def predict_disease(image: UploadFile = File(...)):
     """Predict disease from uploaded image"""
-    if not image.content_type.startswith('image/'):
-        raise HTTPException(400, "File must be an image")
-    
-    # Auto-load model if not loaded
-    if not disease_detector.is_loaded:
-        load_result = disease_detector.load_model()
-        if load_result["status"] != "success":
-            raise HTTPException(400, f"Model loading failed: {load_result['message']}")
-    
-    # Make prediction - use await for async method
-    result = await disease_detector.predict_disease(image)
-    
-    if "error" in result:
-        raise HTTPException(400, result["error"])
-    
-    return result
+    try:
+        if not image.content_type.startswith('image/'):
+            raise HTTPException(400, "File must be an image")
+        
+        # 1. Unload other models to free up RAM
+        yield_predictor.model = None
+        crop_recommender.model = None
+        gc.collect() # Force cleanup
+        
+        # 2. Load Disease Model
+        if not disease_detector.is_loaded:
+            print("Loading disease model...")
+            load_result = disease_detector.load_model()
+            if load_result["status"] != "success":
+                raise HTTPException(400, f"Model loading failed: {load_result['message']}")
+        
+        # 3. Predict
+        result = await disease_detector.predict_disease(image)
+        
+        # 4. IMMEDIATELY Unload Disease Model to save RAM
+        disease_detector.model = None
+        disease_detector.is_loaded = False
+        gc.collect() # Force cleanup
+        print("Disease model unloaded to save RAM")
+
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+        
+        return result
+
+    except Exception as e:
+        # Ensure cleanup even on error
+        disease_detector.model = None
+        disease_detector.is_loaded = False
+        gc.collect()
+        raise e
 
 @app.get("/api/disease-detection/status")
 async def get_disease_status():
