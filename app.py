@@ -57,12 +57,12 @@ async def lifespan(app: FastAPI):
     else:
         print("⚠️ Data file not found - models will train on first request")
     
-    # Load disease model
-    try:
-        disease_detector.load_model()
-        print("✅ Disease detection model loaded")
-    except Exception as e:
-        print(f"⚠️ Disease detection model not loaded: {e}")
+    # Load disease model - COMMENTED OUT TO SAVE MEMORY ON STARTUP
+    # try:
+    #     disease_detector.load_model()
+    #     print("✅ Disease detection model loaded")
+    # except Exception as e:
+    #     print(f"⚠️ Disease detection model not loaded: {e}")
     
     print("🌐 API ready at http://localhost:8000")
     print("📖 Documentation: http://localhost:8000/docs")
@@ -83,9 +83,8 @@ app = FastAPI(
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-   allow_origins=[
-        "https://farmassist-portal.netlify.app",
-    ],
+   allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -221,8 +220,6 @@ async def load_disease_model():
     else:
         raise HTTPException(400, result["message"])
 
-# ... (keep all imports and other routes the same)
-
 @app.post("/api/disease-detection/predict")
 async def predict_disease(image: UploadFile = File(...)):
     """Predict disease from uploaded image"""
@@ -243,7 +240,6 @@ async def predict_disease(image: UploadFile = File(...)):
     
     return result
 
-# ... (rest of the file remains the same)
 @app.get("/api/disease-detection/status")
 async def get_disease_status():
     """Check if disease detection model is loaded"""
